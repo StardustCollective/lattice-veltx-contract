@@ -10,6 +10,7 @@
     "node": "^16.14.2"
   },
   "scripts": {
+    "build": "hardhat compile",
     "test": "hardhat test"
   },
   "dependencies": {
