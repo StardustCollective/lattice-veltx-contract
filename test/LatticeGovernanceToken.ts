@@ -6,7 +6,10 @@ import { BigNumber, ContractTransaction } from "ethers";
 
 import dayjs from "../utils/dayjs";
 import { LatticeToken } from "../typechain-types";
-import { LockedEvent } from "../typechain-types/contracts/LatticeGovernanceToken";
+import {
+  LockedEvent,
+  UnlockedEvent,
+} from "../typechain-types/contracts/LatticeGovernanceToken";
 
 const LOCKUP_POINTS = [
   [dayjs.duration({ months: 6 }), 0.25],
@@ -59,24 +62,60 @@ describe("LatticeGovernanceToken", function () {
       );
     }
   };
-  /* // We define a fixture to reuse the same setup in every test.
-  // We use loadFixture to run this setup once, snapshot that state,
-  // and reset Hardhat Network to that snapshopt in every test.
-  async function deployOneYearLockFixture() {
-    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
-    const ONE_GWEI = 1_000_000_000;
 
-    const lockedAmount = ONE_GWEI;
-    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+  const executeLock = async (
+    context: Awaited<ReturnType<typeof deployTokens>>,
+    ltxLocked: number,
+    lockTimeMonths: number,
+    providedBalance = ltxLocked,
+    providedAllowance = ltxLocked
+  ) => {
+    const { veltxToken, ltxToken, userAccountA } = context;
 
-    // Contracts are deployed using the first signer/account by default
-    const [owner, otherAccount] = await ethers.getSigners();
+    const decimalsLtx = await ltxToken.decimals();
+    const decimalsVeltx = await veltxToken.decimals();
 
-    const Lock = await ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
+    await provideBalance(ltxToken, [[userAccountA.address, providedBalance]]);
 
-    return { lock, unlockTime, lockedAmount, owner, otherAccount };
-  } */
+    await ltxToken
+      .connect(userAccountA)
+      .approve(
+        veltxToken.address,
+        ethers.utils.parseUnits(String(providedAllowance), decimalsLtx)
+      );
+
+    const lockupSlot = (
+      await veltxToken.lockupSlots(userAccountA.address)
+    ).toNumber();
+
+    const lockTrxPromise = veltxToken
+      .connect(userAccountA)
+      .lock(
+        ethers.utils.parseUnits(String(ltxLocked), decimalsLtx),
+        lockTimeMonths * SECONDS_IN_MONTH
+      );
+
+    return { decimalsLtx, decimalsVeltx, lockTrxPromise, lockupSlot };
+  };
+
+  const executeUnlock = async (
+    context: Awaited<ReturnType<typeof deployTokens>>,
+    lockupSlot: number,
+    monthsAhead: number
+  ) => {
+    const { veltxToken, ltxToken, userAccountA } = context;
+
+    const decimalsLtx = await ltxToken.decimals();
+    const decimalsVeltx = await veltxToken.decimals();
+
+    await time.increase(monthsAhead * SECONDS_IN_MONTH);
+
+    const unlockTrxPromise = veltxToken
+      .connect(userAccountA)
+      .unlock(lockupSlot);
+
+    return { decimalsLtx, decimalsVeltx, unlockTrxPromise };
+  };
 
   describe("Deploys", async () => {
     it("Deploys with right owner", async () => {
@@ -125,37 +164,6 @@ describe("LatticeGovernanceToken", function () {
   });
 
   describe("Locks", async () => {
-    const executeLock = async (
-      context: Awaited<ReturnType<typeof deployTokens>>,
-      ltxLocked: number,
-      lockTimeMonths: number,
-      providedBalance = ltxLocked,
-      providedAllowance = ltxLocked
-    ) => {
-      const { veltxToken, ltxToken, userAccountA } = context;
-
-      const decimalsLtx = await ltxToken.decimals();
-      const decimalsVeltx = await veltxToken.decimals();
-
-      await provideBalance(ltxToken, [[userAccountA.address, providedBalance]]);
-
-      await ltxToken
-        .connect(userAccountA)
-        .approve(
-          veltxToken.address,
-          ethers.utils.parseUnits(String(providedAllowance), decimalsLtx)
-        );
-
-      const lockTrxPromise = veltxToken
-        .connect(userAccountA)
-        .lock(
-          ethers.utils.parseUnits(String(ltxLocked), decimalsLtx),
-          lockTimeMonths * SECONDS_IN_MONTH
-        );
-
-      return { decimalsLtx, decimalsVeltx, lockTrxPromise };
-    };
-
     describe("Basic", async () => {
       const testBasicLockup = (
         ltxLocked: number,
@@ -307,6 +315,289 @@ describe("LatticeGovernanceToken", function () {
     });
 
     describe("Reverts", async () => {
+      it("Reverts on not existent lockup point", async () => {
+        const context = await loadFixture(deployTokens);
+
+        const { lockTrxPromise } = await executeLock(context, 2500, 32);
+
+        await expect(lockTrxPromise).to.be.revertedWith(
+          "veLTX: Lockup point does not exist"
+        );
+      });
+
+      it("Reverts on not enough balance", async () => {
+        const context = await loadFixture(deployTokens);
+        const { ltxToken, veltxToken, userAccountA } = context;
+
+        const { decimalsLtx } = await executeLock(
+          context,
+          2500,
+          36,
+          5000,
+          5000
+        );
+
+        await ltxToken.burn(
+          userAccountA.address,
+          ethers.utils.parseUnits(String(2500), decimalsLtx)
+        );
+
+        const lockTrxPromise = veltxToken
+          .connect(userAccountA)
+          .lock(
+            ethers.utils.parseUnits(String(2500), decimalsLtx),
+            36 * SECONDS_IN_MONTH
+          );
+
+        await expect(lockTrxPromise).to.be.revertedWith(
+          "ERC20: transfer amount exceeds balance"
+        );
+      });
+
+      it("Reverts on not enough allowance", async () => {
+        const context = await loadFixture(deployTokens);
+        const { veltxToken, userAccountA } = context;
+
+        const { decimalsLtx } = await executeLock(
+          context,
+          2500,
+          36,
+          5000,
+          2500
+        );
+
+        const lockTrxPromise = veltxToken
+          .connect(userAccountA)
+          .lock(
+            ethers.utils.parseUnits(String(2500), decimalsLtx),
+            36 * SECONDS_IN_MONTH
+          );
+
+        await expect(lockTrxPromise).to.be.revertedWith(
+          "ERC20: insufficient allowance"
+        );
+      });
+    });
+  });
+
+  describe("Unlocks", async () => {
+    describe("Basic", async () => {
+      const testBasicLockupAndUnlock = (
+        ltxLocked: number,
+        lockTimeMonths: number,
+        veltxReleased: number
+      ) => {
+        it(`Locks & Unlocks ${ltxLocked} LTX for ${lockTimeMonths} months to return ${veltxReleased} veLTX`, async () => {
+          const context = await loadFixture(deployTokens);
+          const { ltxToken, veltxToken, userAccountA } = context;
+          const { lockTrxPromise, decimalsLtx, decimalsVeltx, lockupSlot } =
+            await executeLock(context, ltxLocked, lockTimeMonths);
+          await (await lockTrxPromise).wait();
+
+          const { unlockTrxPromise } = await executeUnlock(
+            context,
+            lockupSlot,
+            lockTimeMonths
+          );
+
+          const trx = await unlockTrxPromise;
+          const trxReceipt = await trx.wait();
+
+          if (!trxReceipt.events) {
+            throw new Error("TrxReceipt events is undefined");
+          }
+
+          const lockEvent = trxReceipt.events.find(
+            (event) => event.event === "Unlocked"
+          ) as UnlockedEvent;
+
+          expect(lockEvent.args.user).to.equal(userAccountA.address);
+          expect(lockEvent.args.lockupSlot.toNumber()).to.equal(lockupSlot);
+          expect(lockEvent.args.lockupSlot.toNumber()).to.equal(0);
+          expect(
+            lockEvent.args.amountUnlocked.eq(
+              ethers.utils.parseUnits(String(ltxLocked), decimalsLtx)
+            )
+          ).to.equal(true);
+          expect(
+            lockEvent.args.amountReturned.eq(
+              ethers.utils.parseUnits(String(veltxReleased), decimalsVeltx)
+            )
+          ).to.equal(true);
+
+          expect(
+            parseFloat(
+              ethers.utils.formatUnits(
+                await veltxToken.balanceOf(userAccountA.address),
+                decimalsVeltx
+              )
+            )
+          ).to.equal(0);
+
+          expect(
+            parseFloat(
+              ethers.utils.formatUnits(
+                await ltxToken.balanceOf(userAccountA.address),
+                decimalsLtx
+              )
+            )
+          ).to.equal(ltxLocked);
+        });
+      };
+
+      testBasicLockupAndUnlock(1000, 6, 250);
+      testBasicLockupAndUnlock(1000, 12, 500);
+      testBasicLockupAndUnlock(1000, 24, 750);
+      testBasicLockupAndUnlock(1000, 36, 1000);
+
+      testBasicLockupAndUnlock(7457, 6, 7457 * 0.25);
+      testBasicLockupAndUnlock(4620, 12, 4620 * 0.5);
+      testBasicLockupAndUnlock(3259, 24, 3259 * 0.75);
+      testBasicLockupAndUnlock(6654, 36, 6654);
+
+      testBasicLockupAndUnlock(8019.7973, 6, 8019.7973 * 0.25);
+      testBasicLockupAndUnlock(3399.9228, 12, 3399.9228 * 0.5);
+      testBasicLockupAndUnlock(1333.9405, 24, 1333.9405 * 0.75);
+      testBasicLockupAndUnlock(2526.6499, 36, 2526.6499);
+    });
+
+    describe.skip("Locks multiple times", async () => {
+      const testMultipleLockupAndUnlock = (
+        lockTimes: number,
+        ltxLocked: number,
+        lockTimeMonths: number,
+        veltxReleased: number
+      ) => {
+        const executeLockAndTest = async (
+          context: Awaited<ReturnType<typeof deployTokens>>,
+          lockupSlot: number,
+          totalVeltxReleased: number
+        ) => {
+          const { veltxToken, userAccountA } = context;
+          const { lockTrxPromise, decimalsLtx, decimalsVeltx } =
+            await executeLock(context, ltxLocked, lockTimeMonths);
+
+          const trx = await lockTrxPromise;
+          const trxReceipt = await trx.wait();
+
+          if (!trxReceipt.events) {
+            throw new Error("TrxReceipt events is undefined");
+          }
+
+          const lockEvent = trxReceipt.events.find(
+            (event) => event.event === "Locked"
+          ) as LockedEvent;
+
+          expect(lockEvent.args.user).to.equal(userAccountA.address);
+          expect(lockEvent.args.lockupTime).to.equal(
+            lockTimeMonths * SECONDS_IN_MONTH
+          );
+          expect(lockEvent.args.lockupSlot.toNumber()).to.equal(lockupSlot);
+          expect(
+            lockEvent.args.amountLocked.eq(
+              ethers.utils.parseUnits(String(ltxLocked), decimalsLtx)
+            )
+          ).to.equal(true);
+          expect(
+            lockEvent.args.amountReleased.eq(
+              ethers.utils.parseUnits(String(veltxReleased), decimalsVeltx)
+            )
+          ).to.equal(true);
+
+          expect(
+            parseFloat(
+              ethers.utils.formatUnits(
+                await veltxToken.balanceOf(userAccountA.address),
+                decimalsVeltx
+              )
+            )
+          ).to.approximately(totalVeltxReleased, 0.0001);
+        };
+
+        const executeUnlockAndTest = async (
+          context: Awaited<ReturnType<typeof deployTokens>>,
+          lockupSlot: number,
+          totalVeltxReleased: number
+        ) => {
+          const { veltxToken, userAccountA } = context;
+          const { lockTrxPromise, decimalsLtx, decimalsVeltx } =
+            await executeLock(context, ltxLocked, lockTimeMonths);
+
+          const trx = await lockTrxPromise;
+          const trxReceipt = await trx.wait();
+
+          if (!trxReceipt.events) {
+            throw new Error("TrxReceipt events is undefined");
+          }
+
+          const lockEvent = trxReceipt.events.find(
+            (event) => event.event === "Locked"
+          ) as LockedEvent;
+
+          expect(lockEvent.args.user).to.equal(userAccountA.address);
+          expect(lockEvent.args.lockupTime).to.equal(
+            lockTimeMonths * SECONDS_IN_MONTH
+          );
+          expect(lockEvent.args.lockupSlot.toNumber()).to.equal(lockupSlot);
+          expect(
+            lockEvent.args.amountLocked.eq(
+              ethers.utils.parseUnits(String(ltxLocked), decimalsLtx)
+            )
+          ).to.equal(true);
+          expect(
+            lockEvent.args.amountReleased.eq(
+              ethers.utils.parseUnits(String(veltxReleased), decimalsVeltx)
+            )
+          ).to.equal(true);
+
+          expect(
+            parseFloat(
+              ethers.utils.formatUnits(
+                await veltxToken.balanceOf(userAccountA.address),
+                decimalsVeltx
+              )
+            )
+          ).to.approximately(totalVeltxReleased, 0.0001);
+        };
+
+        it(`Locks & Unlocks ${lockTimes} times for ${lockTimeMonths} months`, async () => {
+          const context = await loadFixture(deployTokens);
+
+          for (let i = 0; i < lockTimes; i++) {
+            await executeLockAndTest(context, i, (i + 1) * veltxReleased);
+          }
+
+          expect(
+            (
+              await context.veltxToken.lockupSlots(context.userAccountA.address)
+            ).toNumber()
+          ).to.equal(lockTimes);
+
+          expect(
+            (
+              await context.veltxToken.balanceOf(context.userAccountA.address)
+            ).toNumber()
+          ).to.equal(0);
+        });
+      };
+
+      testMultipleLockupAndUnlock(4, 1000, 6, 250);
+      testMultipleLockupAndUnlock(9, 1000, 12, 500);
+      testMultipleLockupAndUnlock(1, 1000, 24, 750);
+      testMultipleLockupAndUnlock(6, 1000, 36, 1000);
+
+      testMultipleLockupAndUnlock(1, 7457, 6, 7457 * 0.25);
+      testMultipleLockupAndUnlock(9, 4620, 12, 4620 * 0.5);
+      testMultipleLockupAndUnlock(10, 3259, 24, 3259 * 0.75);
+      testMultipleLockupAndUnlock(6, 6654, 36, 6654);
+
+      testMultipleLockupAndUnlock(9, 8019.7973, 6, 8019.7973 * 0.25);
+      testMultipleLockupAndUnlock(2, 3399.9228, 12, 3399.9228 * 0.5);
+      testMultipleLockupAndUnlock(3, 1333.9405, 24, 1333.9405 * 0.75);
+      testMultipleLockupAndUnlock(4, 2526.6499, 36, 2526.6499);
+    });
+
+    describe.skip("Reverts", async () => {
       it("Reverts on not existent lockup point", async () => {
         const context = await loadFixture(deployTokens);
 
