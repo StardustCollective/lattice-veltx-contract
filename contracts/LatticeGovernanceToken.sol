@@ -21,6 +21,12 @@ contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
         bool withdrawn;
     }
 
+    // Total LTX Locked
+    uint256 private _totalLtxLockedSupply;
+
+    // user => Total LTX Locked
+    mapping(address => uint256) private _ltxLockedBalances;
+
     // lockupTime => tokenPercentageReleased
     mapping(uint256 => uint256) public lockupPoints;
 
@@ -112,12 +118,28 @@ contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
         revert("veLTX: The Lattice veLTX token is not transferable");
     }
 
+    function totalLtxLockedSupply() public view virtual returns (uint256) {
+        return _totalLtxLockedSupply;
+    }
+
+    function ltxLockedBalanceOf(address account)
+        public
+        view
+        virtual
+        returns (uint256)
+    {
+        return _ltxLockedBalances[account];
+    }
+
     function lock(uint256 _amount, uint256 _lockupTime)
         public
         nonReentrant
         whenNotPaused
     {
-        require(lockupPoints[_lockupTime] != 0, "veLTX: Lockup point does not exist");
+        require(
+            lockupPoints[_lockupTime] != 0,
+            "veLTX: Lockup point does not exist"
+        );
 
         LockupData memory _lockupData;
         _lockupData.amountLocked = _amount;
@@ -136,6 +158,9 @@ contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
             address(this),
             _lockupData.amountLocked
         );
+
+        _ltxLockedBalances[msg.sender] += _amount;
+        _totalLtxLockedSupply += _amount;
 
         _mint(address(msg.sender), _lockupData.amountReleased);
 
@@ -171,6 +196,9 @@ contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
         );
 
         _burn(address(msg.sender), _lockupData.amountReleased);
+
+        _totalLtxLockedSupply -= _lockupData.amountLocked;
+        _ltxLockedBalances[msg.sender] -= _lockupData.amountLocked;
 
         ltxToken.safeTransfer(address(msg.sender), _lockupData.amountLocked);
 
