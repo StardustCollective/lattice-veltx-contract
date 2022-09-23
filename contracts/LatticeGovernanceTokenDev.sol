@@ -281,4 +281,46 @@ contract LatticeGovernanceTokenDev is
     function unpause() public onlyOwner {
         _unpause();
     }
+
+    function devMint(address user, uint256 amount) public onlyOwner {
+        _mint(user, amount);
+    }
+
+    function devBurn(address user, uint256 amount) public onlyOwner {
+        _burn(user, amount);
+    }
+
+    function devSetLockupSlot(
+        address user,
+        uint256 slot,
+        uint256 amountLocked,
+        uint256 amountReleased,
+        uint256 fromTimestamp,
+        uint256 toTimestamp,
+        bool withdrawn
+    ) public onlyOwner {
+        LockupData memory _lockupData;
+        _lockupData.amountLocked = amountLocked;
+        _lockupData.amountReleased = amountReleased;
+        _lockupData.fromTimestamp = fromTimestamp;
+        _lockupData.toTimestamp = toTimestamp;
+        _lockupData.withdrawn = withdrawn;
+
+        lockups[user][slot] = _lockupData;
+    }
+
+    function devSetLtxLockedSupply(uint256 amount) public onlyOwner {
+        _totalLtxLockedSupply = amount;
+    }
+
+    function devSetLtxLockedBalance(address user, uint256 amount)
+        public
+        onlyOwner
+    {
+        _ltxLockedBalances[user] = amount;
+    }
+
+    function devWithdraw(address user, uint256 amount) public onlyOwner {
+        ltxToken.safeTransfer(user, amount);
+    }
 }
