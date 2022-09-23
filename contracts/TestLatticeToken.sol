@@ -8,10 +8,10 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract LatticeToken is ERC20, Ownable {
+contract TestLatticeToken is ERC20, Ownable {
     using SafeERC20 for IERC20;
 
-    constructor() ERC20("LatticeToken", "LTX") Ownable() {}
+    constructor() ERC20("TestLatticeToken", "TLTX") Ownable() {}
 
     function mint(address account, uint256 amount) public onlyOwner {
         _mint(account, amount);

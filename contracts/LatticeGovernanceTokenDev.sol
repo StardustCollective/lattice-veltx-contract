@@ -8,7 +8,12 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
+contract LatticeGovernanceTokenDev is
+    ERC20,
+    Ownable,
+    ReentrancyGuard,
+    Pausable
+{
     using SafeERC20 for IERC20;
 
     IERC20 private ltxToken;

@@ -132,4 +132,4 @@ typechain-types
 #Hardhat files
 cache
 artifacts
-
+std-inputs
