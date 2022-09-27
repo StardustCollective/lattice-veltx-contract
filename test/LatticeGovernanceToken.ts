@@ -5,7 +5,7 @@ import { ethers } from "hardhat";
 import { BigNumber, ContractTransaction } from "ethers";
 
 import dayjs from "../utils/dayjs";
-import { LatticeToken } from "../typechain-types";
+import { TestLatticeToken } from "../typechain-types";
 import {
   LockedEvent,
   UnlockedEvent,
@@ -26,7 +26,7 @@ describe("LatticeGovernanceToken", function () {
     const [ownerAccount, userAccountA, userAccountB] =
       await ethers.getSigners();
 
-    const LatticeTokenFactory = await ethers.getContractFactory("LatticeToken");
+    const LatticeTokenFactory = await ethers.getContractFactory("TestLatticeToken");
     const ltxToken = await LatticeTokenFactory.deploy();
 
     const LatticeGovernanceTokenFactory = await ethers.getContractFactory(
@@ -50,7 +50,7 @@ describe("LatticeGovernanceToken", function () {
   };
 
   const provideBalance = async (
-    ltxToken: LatticeToken,
+    ltxToken: TestLatticeToken,
     balances: [string, number][]
   ) => {
     const decimals = await ltxToken.decimals();
