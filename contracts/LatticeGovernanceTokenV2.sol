@@ -140,6 +140,14 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
         return _totalLtxLockedSupply;
     }
 
+    function getLtxToken() public view returns (IERC20) {
+        return ltxToken;
+    }
+
+    function getV1Contract() public view returns (ILatticeGovernanceTokenV1) {
+        return v1Contract;
+    }
+
     function ltxLockedBalanceOf(address account)
         public
         view
@@ -200,9 +208,7 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
             withdrawn: false,
             isVirtual: false
         });
-
-        ltxToken.safeTransferFrom(msg.sender, address(this), _amount);
-
+        
         _ltxLockedBalances[msg.sender] += _amount;
         _totalLtxLockedSupply += _amount;
 
@@ -216,6 +222,8 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
             _amountReleased,
             block.timestamp
         );
+
+        ltxToken.safeTransferFrom(msg.sender, address(this), _amount);
     }
 
     function unlock(uint256 _lockupSlot) public nonReentrant whenNotPaused {
@@ -258,8 +266,6 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
         _totalLtxLockedSupply -= _lockupData.amountLocked;
         _ltxLockedBalances[msg.sender] -= _lockupData.amountLocked;
 
-        ltxToken.safeTransfer(msg.sender, _lockupData.amountLocked);
-
         emit Unlocked(
             msg.sender,
             _lockupSlot,
@@ -267,6 +273,8 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
             _lockupData.amountReleased,
             block.timestamp
         );
+
+        ltxToken.safeTransfer(msg.sender, _lockupData.amountLocked);
     }
 
     function setLockupPoint(
