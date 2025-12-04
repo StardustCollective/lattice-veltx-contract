@@ -20,7 +20,7 @@ export default defineConfig({
     },
   },
   networks: {
-    hardhat: {
+    default: {
       type: 'edr-simulated',
       chainType: 'l1',
       accounts: {
