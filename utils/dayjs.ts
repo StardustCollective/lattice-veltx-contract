@@ -1,8 +1,6 @@
-import dayjs from 'dayjs'
-import dayjs_utc from 'dayjs/plugin/utc'
-import dayjs_duration from 'dayjs/plugin/duration'
+import dayjs from 'dayjs';
+import dayjs_duration from 'dayjs/plugin/duration.js';
 
-dayjs.extend(dayjs_utc)
-dayjs.extend(dayjs_duration)
-
-export default dayjs
+export const configureDayJsLib = () => {
+  dayjs.extend(dayjs_duration);
+};
