@@ -7,11 +7,13 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./ILatticeGovernanceTokenV1.sol";
 
 contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     IERC20 private ltxToken;
+    ILatticeGovernanceTokenV1 private v1Contract;
 
     struct LockupData {
         uint256 amountLocked;
@@ -80,8 +82,20 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
 
     event VirtualLockupsDisabled(uint256 timestamp);
 
-    constructor(IERC20 _ltxToken) ERC20("LatticeGovernanceToken", "veLTX") Ownable(msg.sender) {
+    event VirtualLockupRemoved(
+        address indexed user,
+        uint256 indexed lockupSlot,
+        uint256 veLTXBurned,
+        uint256 timestamp
+    );
+
+    constructor(
+        IERC20 _ltxToken,
+        ILatticeGovernanceTokenV1 _v1Contract
+    ) ERC20("LatticeGovernanceToken", "veLTX") Ownable(msg.sender) {
+        require(address(_v1Contract) != address(0), "veLTX: Invalid V1 contract address");
         ltxToken = _ltxToken;
+        v1Contract = _v1Contract;
     }
 
     function transfer(address to, uint256 amount)
@@ -367,5 +381,56 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
         require(!virtualLockupsDisabled, "veLTX: Virtual lockups already disabled");
         virtualLockupsDisabled = true;
         emit VirtualLockupsDisabled(block.timestamp);
+    }
+
+    /**
+     * @dev Admin removes a virtual lockup that was unlocked in V1
+     * @param user The user address
+     * @param lockupSlot The lockup slot to remove
+     */
+    function adminRemoveVirtualLockup(
+        address user,
+        uint256 lockupSlot
+    ) public onlyOwner nonReentrant {
+        require(user != address(0), "veLTX: Invalid user address");
+        require(lockupSlots[user] > lockupSlot, "veLTX: Lockup slot not found");
+
+        LockupData storage _lockupData = lockups[user][lockupSlot];
+
+        require(_lockupData.isVirtual, "veLTX: Lockup is not virtual");
+        require(!_lockupData.withdrawn, "veLTX: Lockup already withdrawn");
+
+        // Verify that the lockup was unlocked in V1
+        (, , , , bool v1Withdrawn) = v1Contract.lockups(user, lockupSlot);
+        require(v1Withdrawn, "veLTX: Lockup not unlocked in V1");
+
+        _lockupData.withdrawn = true;
+
+        // Burn the veLTX tokens
+        _burn(user, _lockupData.amountReleased);
+
+        emit VirtualLockupRemoved(
+            user,
+            lockupSlot,
+            _lockupData.amountReleased,
+            block.timestamp
+        );
+    }
+
+    /**
+     * @dev Batch remove virtual lockups for multiple users
+     */
+    function adminBatchRemoveVirtualLockups(
+        address[] calldata users,
+        uint256[] calldata slots
+    ) external onlyOwner {
+        require(
+            users.length == slots.length,
+            "veLTX: Array length mismatch"
+        );
+
+        for (uint256 i = 0; i < users.length; i++) {
+            adminRemoveVirtualLockup(users[i], slots[i]);
+        }
     }
 }

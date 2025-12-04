@@ -1,7 +1,11 @@
+import { type HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/types';
 import { expect } from 'chai';
 import dayjs from 'dayjs';
+import { ContractTransactionResponse, TransactionReceipt } from 'ethers';
 import hre from 'hardhat';
 
+import type { LatticeGovernanceTokenV1 } from '../types/ethers-contracts/LatticeGovernanceTokenV1.ts';
+import type { LatticeGovernanceTokenV2 } from '../types/ethers-contracts/LatticeGovernanceTokenV2.ts';
 import type { TestLatticeToken } from '../types/ethers-contracts/TestLatticeToken.ts';
 import { configureDayJsLib } from '../utils/index.ts';
 
@@ -25,12 +29,20 @@ const deployTokens = async () => {
     await ethers.getContractFactory('TestLatticeToken');
   const ltxToken = await LatticeTokenFactory.connect(ownerAccount).deploy();
 
+  // Deploy V1 contract for testing V2's removal functionality
+  const LatticeGovernanceTokenV1Factory = await ethers.getContractFactory(
+    'LatticeGovernanceTokenV1',
+  );
+  const veltxTokenV1 = await LatticeGovernanceTokenV1Factory.connect(
+    ownerAccount,
+  ).deploy(await ltxToken.getAddress());
+
   const LatticeGovernanceTokenFactory = await ethers.getContractFactory(
     'LatticeGovernanceTokenV2',
   );
   const veltxToken = await LatticeGovernanceTokenFactory.connect(
     ownerAccount,
-  ).deploy(await ltxToken.getAddress());
+  ).deploy(await ltxToken.getAddress(), await veltxTokenV1.getAddress());
 
   const exponentDiff =
     (await veltxToken.decimals()) - (await ltxToken.decimals());
@@ -45,7 +57,25 @@ const deployTokens = async () => {
     await tx.wait(1);
   }
 
-  return { ltxToken, veltxToken, ownerAccount, userAccountA, userAccountB };
+  // Set up V1 with same lockup points for testing
+  for (const [lockupTime, tokenPercentageReleased] of LOCKUP_POINTS) {
+    const tx = await veltxTokenV1
+      .connect(ownerAccount)
+      [
+        'setLockupPoint(uint256,uint256)'
+      ](lockupTime.as('seconds'), tokenPercentageReleased * 10 ** Number(exponentDiff));
+
+    await tx.wait(1);
+  }
+
+  return {
+    ltxToken,
+    veltxToken,
+    veltxTokenV1,
+    ownerAccount,
+    userAccountA,
+    userAccountB,
+  };
 };
 
 const provideBalance = async (
@@ -60,44 +90,74 @@ const provideBalance = async (
 };
 
 const executeLock = async (
-  context: Awaited<ReturnType<typeof deployTokens>>,
+  context: {
+    veltxToken: LatticeGovernanceTokenV2 | LatticeGovernanceTokenV1;
+    ltxToken: TestLatticeToken;
+    account: HardhatEthersSigner;
+  },
   ltxLocked: number,
   lockTimeMonths: number,
+  waitConfirmation = true,
   providedBalance = ltxLocked,
   providedAllowance = ltxLocked,
 ) => {
-  const { veltxToken, ltxToken, userAccountA } = context;
+  const { veltxToken, ltxToken, account } = context;
 
   const decimalsLtx = await ltxToken.decimals();
   const decimalsVeltx = await veltxToken.decimals();
 
-  await provideBalance(ltxToken, [[userAccountA.address, providedBalance]]);
+  await provideBalance(ltxToken, [[account.address, providedBalance]]);
 
   await ltxToken
-    .connect(userAccountA)
+    .connect(account)
     .approve(
       await veltxToken.getAddress(),
       ethers.parseUnits(String(providedAllowance), decimalsLtx),
     );
 
-  const lockupSlot = Number(await veltxToken.lockupSlots(userAccountA.address));
+  const lockupSlot = Number(await veltxToken.lockupSlots(account.address));
 
   const lockTrxPromise = veltxToken
-    .connect(userAccountA)
+    .connect(account)
     .lock(
       ethers.parseUnits(String(ltxLocked), decimalsLtx),
       dayjs.duration({ months: lockTimeMonths }).as('seconds'),
     );
 
-  return { decimalsLtx, decimalsVeltx, lockTrxPromise, lockupSlot };
+  let lockTrx: ContractTransactionResponse | null = null;
+  let lockTrxReceipt: TransactionReceipt | null = null;
+
+  if (waitConfirmation) {
+    lockTrx = await lockTrxPromise;
+    lockTrxReceipt = await lockTrx.wait(1);
+  }
+
+  const lockupData = waitConfirmation
+    ? await veltxToken.lockups(account.address, lockupSlot)
+    : null;
+
+  return {
+    decimalsLtx,
+    decimalsVeltx,
+    lockTrxPromise,
+    lockupSlot,
+    lockTrx,
+    lockTrxReceipt,
+    lockupData,
+  };
 };
 
 const executeUnlock = async (
-  context: Awaited<ReturnType<typeof deployTokens>>,
+  context: {
+    veltxToken: LatticeGovernanceTokenV2 | LatticeGovernanceTokenV1;
+    ltxToken: TestLatticeToken;
+    account: HardhatEthersSigner;
+  },
   lockupSlot: number,
   monthsAhead: number,
+  waitConfirmation = true,
 ) => {
-  const { veltxToken, ltxToken, userAccountA } = context;
+  const { veltxToken, ltxToken, account } = context;
 
   const decimalsLtx = await ltxToken.decimals();
   const decimalsVeltx = await veltxToken.decimals();
@@ -106,9 +166,23 @@ const executeUnlock = async (
     dayjs.duration({ months: monthsAhead }).as('seconds'),
   );
 
-  const unlockTrxPromise = veltxToken.connect(userAccountA).unlock(lockupSlot);
+  const unlockTrxPromise = veltxToken.connect(account).unlock(lockupSlot);
 
-  return { decimalsLtx, decimalsVeltx, unlockTrxPromise };
+  let unlockTrx: ContractTransactionResponse | null = null;
+  let unlockTrxReceipt: TransactionReceipt | null = null;
+
+  if (waitConfirmation) {
+    unlockTrx = await unlockTrxPromise;
+    unlockTrxReceipt = await unlockTrx.wait(1);
+  }
+
+  return {
+    decimalsLtx,
+    decimalsVeltx,
+    unlockTrxPromise,
+    unlockTrx,
+    unlockTrxReceipt,
+  };
 };
 
 describe('LatticeGovernanceTokenV2', function () {
@@ -184,14 +258,15 @@ describe('LatticeGovernanceTokenV2', function () {
       ) => {
         it(`Locks ${ltxLocked} LTX for ${lockTimeMonths} months to receive ${veltxReleased} veLTX`, async () => {
           const context = await networkHelpers.loadFixture(deployTokens);
-          const { veltxToken, userAccountA } = context;
-          const { lockTrxPromise, decimalsLtx, decimalsVeltx } =
-            await executeLock(context, ltxLocked, lockTimeMonths);
+          const { veltxToken, ltxToken, userAccountA } = context;
+          const { lockTrxReceipt, decimalsLtx, decimalsVeltx } =
+            await executeLock(
+              { veltxToken, ltxToken, account: userAccountA },
+              ltxLocked,
+              lockTimeMonths,
+            );
 
-          const trx = await lockTrxPromise;
-          const trxReceipt = await trx.wait();
-
-          const lockEvent = trxReceipt?.logs
+          const lockEvent = lockTrxReceipt?.logs
             ?.map((log) => {
               try {
                 return veltxToken.interface.parseLog({
@@ -259,14 +334,15 @@ describe('LatticeGovernanceTokenV2', function () {
           lockupSlot: number,
           totalVeltxReleased: number,
         ) => {
-          const { veltxToken, userAccountA } = context;
-          const { lockTrxPromise, decimalsLtx, decimalsVeltx } =
-            await executeLock(context, ltxLocked, lockTimeMonths);
+          const { veltxToken, ltxToken, userAccountA } = context;
+          const { lockTrxReceipt, decimalsLtx, decimalsVeltx } =
+            await executeLock(
+              { veltxToken, ltxToken, account: userAccountA },
+              ltxLocked,
+              lockTimeMonths,
+            );
 
-          const trx = await lockTrxPromise;
-          const trxReceipt = await trx.wait();
-
-          const lockEvent = trxReceipt?.logs
+          const lockEvent = lockTrxReceipt?.logs
             ?.map((log) => {
               try {
                 return veltxToken.interface.parseLog({
@@ -342,9 +418,15 @@ describe('LatticeGovernanceTokenV2', function () {
 
     describe('Reverts', async () => {
       it('Reverts on not existent lockup point', async () => {
-        const context = await networkHelpers.loadFixture(deployTokens);
+        const { veltxToken, ltxToken, userAccountA } =
+          await networkHelpers.loadFixture(deployTokens);
 
-        const { lockTrxPromise } = await executeLock(context, 2500, 32);
+        const { lockTrxPromise } = await executeLock(
+          { veltxToken, ltxToken, account: userAccountA },
+          2500,
+          32,
+          false,
+        );
 
         await expect(lockTrxPromise).to.be.revertedWith(
           'veLTX: Lockup point does not exist',
@@ -355,25 +437,14 @@ describe('LatticeGovernanceTokenV2', function () {
         const context = await networkHelpers.loadFixture(deployTokens);
         const { ltxToken, veltxToken, userAccountA } = context;
 
-        const { decimalsLtx } = await executeLock(
-          context,
+        const { lockTrxPromise } = await executeLock(
+          { veltxToken, ltxToken, account: userAccountA },
           2500,
           36,
-          5000,
-          5000,
+          false,
+          100,
+          2500,
         );
-
-        await ltxToken.burn(
-          userAccountA.address,
-          ethers.parseUnits(String(2500), decimalsLtx),
-        );
-
-        const lockTrxPromise = veltxToken
-          .connect(userAccountA)
-          .lock(
-            ethers.parseUnits(String(2500), decimalsLtx),
-            dayjs.duration({ months: 36 }).as('seconds'),
-          );
 
         await expect(lockTrxPromise).to.be.revertedWithCustomError(
           veltxToken,
@@ -383,22 +454,16 @@ describe('LatticeGovernanceTokenV2', function () {
 
       it('Reverts on not enough allowance', async () => {
         const context = await networkHelpers.loadFixture(deployTokens);
-        const { veltxToken, userAccountA } = context;
+        const { veltxToken, ltxToken, userAccountA } = context;
 
-        const { decimalsLtx } = await executeLock(
-          context,
+        const { lockTrxPromise } = await executeLock(
+          { veltxToken, ltxToken, account: userAccountA },
           2500,
           36,
-          5000,
+          false,
           2500,
+          0,
         );
-
-        const lockTrxPromise = veltxToken
-          .connect(userAccountA)
-          .lock(
-            ethers.parseUnits(String(2500), decimalsLtx),
-            dayjs.duration({ months: 36 }).as('seconds'),
-          );
 
         await expect(lockTrxPromise).to.be.revertedWithCustomError(
           veltxToken,
@@ -418,20 +483,19 @@ describe('LatticeGovernanceTokenV2', function () {
         it(`Locks & Unlocks ${ltxLocked} LTX for ${lockTimeMonths} months to return ${veltxReleased} veLTX`, async () => {
           const context = await networkHelpers.loadFixture(deployTokens);
           const { ltxToken, veltxToken, userAccountA } = context;
-          const { lockTrxPromise, decimalsLtx, decimalsVeltx, lockupSlot } =
-            await executeLock(context, ltxLocked, lockTimeMonths);
-          await (await lockTrxPromise).wait();
+          const { decimalsLtx, decimalsVeltx, lockupSlot } = await executeLock(
+            { veltxToken, ltxToken, account: userAccountA },
+            ltxLocked,
+            lockTimeMonths,
+          );
 
-          const { unlockTrxPromise } = await executeUnlock(
-            context,
+          const { unlockTrxReceipt } = await executeUnlock(
+            { veltxToken, ltxToken, account: userAccountA },
             lockupSlot,
             lockTimeMonths,
           );
 
-          const trx = await unlockTrxPromise;
-          const trxReceipt = await trx.wait();
-
-          const unlockEvent = trxReceipt?.logs
+          const unlockEvent = unlockTrxReceipt?.logs
             ?.map((log) => {
               try {
                 return veltxToken.interface.parseLog({
@@ -878,8 +942,11 @@ describe('LatticeGovernanceTokenV2', function () {
         const { veltxToken, ownerAccount, userAccountA, ltxToken } = context;
 
         // Create a regular lockup
-        const { lockTrxPromise } = await executeLock(context, 1000, 36);
-        await (await lockTrxPromise).wait();
+        await executeLock(
+          { veltxToken, ltxToken, account: userAccountA },
+          1000,
+          36,
+        );
 
         // Create a virtual lockup
         const amountLocked = ethers.parseUnits('1000', 8);
@@ -1124,12 +1191,15 @@ describe('LatticeGovernanceTokenV2', function () {
       });
 
       it('Should correctly track ltxLockedBalanceOf excluding virtual lockups', async () => {
-        const context = await networkHelpers.loadFixture(deployTokens);
-        const { veltxToken, ownerAccount, userAccountA } = context;
+        const { veltxToken, ltxToken, ownerAccount, userAccountA } =
+          await networkHelpers.loadFixture(deployTokens);
 
         // Create regular lockup
-        const { lockTrxPromise } = await executeLock(context, 1000, 36);
-        await (await lockTrxPromise).wait();
+        await executeLock(
+          { veltxToken, ltxToken, account: userAccountA },
+          1000,
+          36,
+        );
 
         const ltxLockedAfterRegular = await veltxToken.ltxLockedBalanceOf(
           userAccountA.address,
@@ -1152,6 +1222,394 @@ describe('LatticeGovernanceTokenV2', function () {
         expect(
           await veltxToken.ltxLockedBalanceOf(userAccountA.address),
         ).to.equal(ethers.parseUnits('1000', 8));
+      });
+    });
+
+    describe('Remove Virtual Lockups', async () => {
+      it('Should remove virtual lockup that was unlocked in V1', async () => {
+        const {
+          veltxToken,
+          veltxTokenV1,
+          ownerAccount,
+          userAccountA,
+          ltxToken,
+        } = await networkHelpers.loadFixture(deployTokens);
+
+        const { lockupData: lockupDataV1 } = await executeLock(
+          { veltxToken: veltxTokenV1, ltxToken, account: userAccountA },
+          1000,
+          36,
+        );
+
+        if (!lockupDataV1) {
+          throw new Error('Lockup data not found');
+        }
+
+        // Create virtual lockup in V2 with same slot
+        await veltxToken
+          .connect(ownerAccount)
+          .adminCreateVirtualLockup(
+            userAccountA.address,
+            lockupDataV1.amountLocked,
+            lockupDataV1.amountReleased,
+            lockupDataV1.fromTimestamp,
+            lockupDataV1.toTimestamp,
+          );
+
+        await executeUnlock(
+          { veltxToken: veltxTokenV1, ltxToken, account: userAccountA },
+          0,
+          36,
+        );
+
+        expect(await veltxToken.balanceOf(userAccountA.address)).to.equal(
+          lockupDataV1.amountReleased,
+        );
+
+        // Admin should be able to remove the virtual lockup
+        const tx = await veltxToken
+          .connect(ownerAccount)
+          .adminRemoveVirtualLockup(userAccountA.address, 0);
+        const receipt = await tx.wait();
+
+        // Check event was emitted
+        const event = receipt?.logs
+          ?.map((log) => {
+            try {
+              return veltxToken.interface.parseLog({
+                topics: [...log.topics],
+                data: log.data,
+              });
+            } catch {
+              return null;
+            }
+          })
+          .find((parsed) => parsed?.name === 'VirtualLockupRemoved');
+
+        expect(event).to.not.be.undefined;
+        expect(event?.args?.user).to.equal(userAccountA.address);
+        expect(Number(event?.args?.lockupSlot)).to.equal(0);
+        expect(event?.args?.veLTXBurned).to.equal(lockupDataV1.amountReleased);
+
+        // veLTX should be burned
+        expect(await veltxToken.balanceOf(userAccountA.address)).to.equal(0n);
+
+        // Lockup should be marked as withdrawn
+        const lockup = await veltxToken.lockups(userAccountA.address, 0);
+        expect(lockup.withdrawn).to.equal(true);
+      });
+
+      it('Should revert when removing lockup not unlocked in V1', async () => {
+        const {
+          veltxToken,
+          veltxTokenV1,
+          ownerAccount,
+          userAccountA,
+          ltxToken,
+        } = await networkHelpers.loadFixture(deployTokens);
+
+        // Provide balance and create lockup in V1 but dont unlock it
+        const { lockupData: lockupDataV1 } = await executeLock(
+          { veltxToken: veltxTokenV1, ltxToken, account: userAccountA },
+          1000,
+          36,
+        );
+
+        if (!lockupDataV1) {
+          throw new Error('Lockup data not found');
+        }
+
+        // Create virtual lockup in V2
+        await veltxToken
+          .connect(ownerAccount)
+          .adminCreateVirtualLockup(
+            userAccountA.address,
+            lockupDataV1.amountLocked,
+            lockupDataV1.amountReleased,
+            lockupDataV1.fromTimestamp,
+            lockupDataV1.toTimestamp,
+          );
+
+        // Attempt to remove should fail because V1 lockup is not unlocked
+        await expect(
+          veltxToken
+            .connect(ownerAccount)
+            .adminRemoveVirtualLockup(userAccountA.address, 0),
+        ).to.be.revertedWith('veLTX: Lockup not unlocked in V1');
+      });
+
+      it('Should revert when removing non-virtual lockup', async () => {
+        const { veltxToken, ltxToken, ownerAccount, userAccountA } =
+          await networkHelpers.loadFixture(deployTokens);
+
+        // Create a regular lockup
+        await executeLock(
+          { veltxToken, ltxToken, account: userAccountA },
+          1000,
+          36,
+        );
+
+        // Attempt to remove should fail because it's not virtual
+        await expect(
+          veltxToken
+            .connect(ownerAccount)
+            .adminRemoveVirtualLockup(userAccountA.address, 0),
+        ).to.be.revertedWith('veLTX: Lockup is not virtual');
+      });
+
+      it('Should revert when removing already withdrawn lockup', async () => {
+        const {
+          veltxToken,
+          veltxTokenV1,
+          ownerAccount,
+          userAccountA,
+          ltxToken,
+        } = await networkHelpers.loadFixture(deployTokens);
+
+        // Setup and unlock in V1
+        const { lockupData: lockupDataV1 } = await executeLock(
+          { veltxToken: veltxTokenV1, ltxToken, account: userAccountA },
+          1000,
+          36,
+        );
+
+        if (!lockupDataV1) {
+          throw new Error('Lockup data not found');
+        }
+
+        // Create and remove virtual lockup in V2
+        await veltxToken
+          .connect(ownerAccount)
+          .adminCreateVirtualLockup(
+            userAccountA.address,
+            lockupDataV1.amountLocked,
+            lockupDataV1.amountReleased,
+            lockupDataV1.fromTimestamp,
+            lockupDataV1.toTimestamp,
+          );
+
+        await executeUnlock(
+          { veltxToken: veltxTokenV1, ltxToken, account: userAccountA },
+          0,
+          36,
+        );
+
+        await veltxToken
+          .connect(ownerAccount)
+          .adminRemoveVirtualLockup(userAccountA.address, 0);
+
+        // Attempt to remove again should fail
+        await expect(
+          veltxToken
+            .connect(ownerAccount)
+            .adminRemoveVirtualLockup(userAccountA.address, 0),
+        ).to.be.revertedWith('veLTX: Lockup already withdrawn');
+      });
+
+      it('Should revert when non-owner tries to remove', async () => {
+        const { veltxToken, ownerAccount, userAccountA } =
+          await networkHelpers.loadFixture(deployTokens);
+
+        const currentTime = BigInt(Math.floor(Date.now() / 1000));
+        await veltxToken
+          .connect(ownerAccount)
+          .adminCreateVirtualLockup(
+            userAccountA.address,
+            ethers.parseUnits('1000', 8),
+            ethers.parseUnits('1000', 18),
+            currentTime,
+            currentTime + BigInt(dayjs.duration({ months: 36 }).as('seconds')),
+          );
+
+        await expect(
+          veltxToken
+            .connect(userAccountA)
+            .adminRemoveVirtualLockup(userAccountA.address, 0),
+        ).to.be.revertedWithCustomError(
+          veltxToken,
+          'OwnableUnauthorizedAccount',
+        );
+      });
+
+      it('Should revert with invalid user address', async () => {
+        const { veltxToken, ownerAccount } =
+          await networkHelpers.loadFixture(deployTokens);
+
+        await expect(
+          veltxToken
+            .connect(ownerAccount)
+            .adminRemoveVirtualLockup(ethers.ZeroAddress, 0),
+        ).to.be.revertedWith('veLTX: Invalid user address');
+      });
+
+      it('Should revert with non-existent lockup slot', async () => {
+        const { veltxToken, ownerAccount, userAccountA } =
+          await networkHelpers.loadFixture(deployTokens);
+
+        await expect(
+          veltxToken
+            .connect(ownerAccount)
+            .adminRemoveVirtualLockup(userAccountA.address, 5),
+        ).to.be.revertedWith('veLTX: Lockup slot not found');
+      });
+    });
+
+    describe('Batch Remove Virtual Lockups', async () => {
+      it('Should batch remove multiple virtual lockups', async () => {
+        const {
+          veltxToken,
+          veltxTokenV1,
+          ownerAccount,
+          userAccountA,
+          userAccountB,
+          ltxToken,
+        } = await networkHelpers.loadFixture(deployTokens);
+
+        // Setup V1 lockups for both users
+        await provideBalance(ltxToken, [
+          [userAccountA.address, 1000],
+          [userAccountB.address, 2000],
+        ]);
+
+        await ltxToken
+          .connect(userAccountA)
+          .approve(
+            await veltxTokenV1.getAddress(),
+            ethers.parseUnits('1000', 8),
+          );
+        await ltxToken
+          .connect(userAccountB)
+          .approve(
+            await veltxTokenV1.getAddress(),
+            ethers.parseUnits('2000', 8),
+          );
+
+        // Lock in V1
+        await veltxTokenV1
+          .connect(userAccountA)
+          .lock(
+            ethers.parseUnits('1000', 8),
+            dayjs.duration({ months: 36 }).as('seconds'),
+          );
+        await veltxTokenV1
+          .connect(userAccountB)
+          .lock(
+            ethers.parseUnits('2000', 8),
+            dayjs.duration({ months: 36 }).as('seconds'),
+          );
+
+        // Fast forward and unlock in V1
+        await networkHelpers.time.increase(
+          dayjs.duration({ months: 36 }).as('seconds'),
+        );
+        await veltxTokenV1.connect(userAccountA).unlock(0);
+        await veltxTokenV1.connect(userAccountB).unlock(0);
+
+        // Create virtual lockups in V2
+        const currentTime = BigInt(Math.floor(Date.now() / 1000));
+        const fromTimestamp =
+          currentTime - BigInt(dayjs.duration({ months: 36 }).as('seconds'));
+        const toTimestamp = currentTime;
+
+        await veltxToken
+          .connect(ownerAccount)
+          .adminBatchCreateVirtualLockups(
+            [userAccountA.address, userAccountB.address],
+            [ethers.parseUnits('1000', 8), ethers.parseUnits('2000', 8)],
+            [ethers.parseUnits('1000', 18), ethers.parseUnits('2000', 18)],
+            [fromTimestamp, fromTimestamp],
+            [toTimestamp, toTimestamp],
+          );
+
+        expect(await veltxToken.balanceOf(userAccountA.address)).to.equal(
+          ethers.parseUnits('1000', 18),
+        );
+        expect(await veltxToken.balanceOf(userAccountB.address)).to.equal(
+          ethers.parseUnits('2000', 18),
+        );
+
+        // Batch remove
+        await veltxToken
+          .connect(ownerAccount)
+          .adminBatchRemoveVirtualLockups(
+            [userAccountA.address, userAccountB.address],
+            [0, 0],
+          );
+
+        // Both should have veLTX burned
+        expect(await veltxToken.balanceOf(userAccountA.address)).to.equal(0n);
+        expect(await veltxToken.balanceOf(userAccountB.address)).to.equal(0n);
+      });
+
+      it('Should revert batch remove with array length mismatch', async () => {
+        const { veltxToken, ownerAccount, userAccountA, userAccountB } =
+          await networkHelpers.loadFixture(deployTokens);
+
+        await expect(
+          veltxToken.connect(ownerAccount).adminBatchRemoveVirtualLockups(
+            [userAccountA.address, userAccountB.address],
+            [0], // Mismatch
+          ),
+        ).to.be.revertedWith('veLTX: Array length mismatch');
+      });
+
+      it('Should revert batch remove if any lockup is invalid', async () => {
+        const {
+          veltxToken,
+          veltxTokenV1,
+          ownerAccount,
+          userAccountA,
+          userAccountB,
+          ltxToken,
+        } = await networkHelpers.loadFixture(deployTokens);
+
+        // Setup only userA in V1
+        await provideBalance(ltxToken, [[userAccountA.address, 1000]]);
+        await ltxToken
+          .connect(userAccountA)
+          .approve(
+            await veltxTokenV1.getAddress(),
+            ethers.parseUnits('1000', 8),
+          );
+
+        await veltxTokenV1
+          .connect(userAccountA)
+          .lock(
+            ethers.parseUnits('1000', 8),
+            dayjs.duration({ months: 36 }).as('seconds'),
+          );
+
+        await networkHelpers.time.increase(
+          dayjs.duration({ months: 36 }).as('seconds'),
+        );
+        await veltxTokenV1.connect(userAccountA).unlock(0);
+
+        // Create virtual lockups in V2 for both users
+        const currentTime = BigInt(Math.floor(Date.now() / 1000));
+        await veltxToken
+          .connect(ownerAccount)
+          .adminBatchCreateVirtualLockups(
+            [userAccountA.address, userAccountB.address],
+            [ethers.parseUnits('1000', 8), ethers.parseUnits('2000', 8)],
+            [ethers.parseUnits('1000', 18), ethers.parseUnits('2000', 18)],
+            [currentTime, currentTime],
+            [
+              currentTime +
+                BigInt(dayjs.duration({ months: 36 }).as('seconds')),
+              currentTime +
+                BigInt(dayjs.duration({ months: 36 }).as('seconds')),
+            ],
+          );
+
+        // Batch remove should fail because userB's lockup doesn't exist in V1
+        await expect(
+          veltxToken
+            .connect(ownerAccount)
+            .adminBatchRemoveVirtualLockups(
+              [userAccountA.address, userAccountB.address],
+              [0, 0],
+            ),
+        ).to.be.revertedWith('veLTX: Lockup not unlocked in V1');
       });
     });
   });
