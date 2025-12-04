@@ -24,6 +24,9 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
         bool isVirtual; // If true, no LTX was locked (admin-created)
     }
 
+    // Permanent flag to disable virtual lockup creation
+    bool public virtualLockupsDisabled;
+
     // Total LTX Locked (excludes virtual lockups)
     uint256 private _totalLtxLockedSupply;
 
@@ -38,9 +41,6 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
 
     // user => (slots[index] => lockupData)
     mapping(address => mapping(uint256 => LockupData)) public lockups;
-
-    // Permanent flag to disable virtual lockup creation
-    bool public virtualLockupsDisabled;
 
     event Locked(
         address indexed user,
@@ -59,6 +59,11 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
         uint256 timestamp
     );
 
+    event LockupPointSet(
+        uint256 indexed lockupTime,
+        uint256 indexed tokenPercentageReleased
+    );
+
     event VirtualLockupCreated(
         address indexed user,
         uint256 indexed lockupSlot,
@@ -75,19 +80,14 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
         uint256 timestamp
     );
 
-    event LockupPointSet(
-        uint256 indexed lockupTime,
-        uint256 indexed tokenPercentageReleased
-    );
-
-    event VirtualLockupsDisabled(uint256 timestamp);
-
     event VirtualLockupRemoved(
         address indexed user,
         uint256 indexed lockupSlot,
         uint256 veLTXBurned,
         uint256 timestamp
     );
+
+    event VirtualLockupsDisabled(uint256 timestamp);
 
     constructor(
         IERC20 _ltxToken,
@@ -269,6 +269,36 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
         );
     }
 
+    function setLockupPoint(
+        uint256 _lockupTime,
+        uint256 _tokenPercentageReleased
+    ) public onlyOwner {
+        setLockupPoint(_lockupTime, _tokenPercentageReleased, false);
+    }
+
+    function setLockupPoint(
+        uint256 _lockupTime,
+        uint256 _tokenPercentageReleased,
+        bool _force
+    ) public onlyOwner {
+        require(
+            lockupPoints[_lockupTime] == 0 || _force,
+            "veLTX: Lockup point is already set"
+        );
+
+        lockupPoints[_lockupTime] = _tokenPercentageReleased;
+
+        emit LockupPointSet(_lockupTime, _tokenPercentageReleased);
+    }
+
+    function pause() public onlyOwner {
+        _pause();
+    }
+
+    function unpause() public onlyOwner {
+        _unpause();
+    }
+
     /**
      * @dev Admin creates a virtual lockup that mints veLTX without locking LTX
      * @param user The user to create the lockup for
@@ -340,36 +370,6 @@ contract LatticeGovernanceTokenV2 is ERC20, Ownable, ReentrancyGuard, Pausable {
                 toTimestamps[i]
             );
         }
-    }
-
-    function setLockupPoint(
-        uint256 _lockupTime,
-        uint256 _tokenPercentageReleased
-    ) public onlyOwner {
-        setLockupPoint(_lockupTime, _tokenPercentageReleased, false);
-    }
-
-    function setLockupPoint(
-        uint256 _lockupTime,
-        uint256 _tokenPercentageReleased,
-        bool _force
-    ) public onlyOwner {
-        require(
-            lockupPoints[_lockupTime] == 0 || _force,
-            "veLTX: Lockup point is already set"
-        );
-
-        lockupPoints[_lockupTime] = _tokenPercentageReleased;
-
-        emit LockupPointSet(_lockupTime, _tokenPercentageReleased);
-    }
-
-    function pause() public onlyOwner {
-        _pause();
-    }
-
-    function unpause() public onlyOwner {
-        _unpause();
     }
 
     /**
