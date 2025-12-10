@@ -1,30 +1,53 @@
-import * as dotenv from "dotenv";
+import hardhatToolboxMochaEthersPlugin from '@nomicfoundation/hardhat-toolbox-mocha-ethers';
+import { configVariable, defineConfig } from 'hardhat/config';
 
-import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
-
-dotenv.config();
-
-const accounts = process.env.LATTICE_EXCHANGE_ACCOUNT_PK
-  ? [process.env.LATTICE_EXCHANGE_ACCOUNT_PK]
-  : [];
-
-const config: HardhatUserConfig = {
-  solidity: "0.8.9",
-  networks: {
-    mainnet: {
-      url: `https://mainnet.infura.io/v3/${process.env.INFURA_PROJECT_ID}`,
-      accounts,
-    },
-    ropsten: {
-      url: `https://ropsten.infura.io/v3/${process.env.INFURA_PROJECT_ID}`,
-      accounts,
-    },
-    goerli: {
-      url: `https://goerli.infura.io/v3/${process.env.INFURA_PROJECT_ID}`,
-      accounts,
+export default defineConfig({
+  plugins: [hardhatToolboxMochaEthersPlugin],
+  solidity: {
+    profiles: {
+      default: {
+        version: '0.8.28',
+      },
+      production: {
+        version: '0.8.28',
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
     },
   },
-};
-
-export default config;
+  networks: {
+    default: {
+      type: 'edr-simulated',
+      chainType: 'l1',
+      accounts: {
+        mnemonic: 'test test test test test test test test test test test junk',
+        initialIndex: 0,
+        count: 100,
+      },
+    },
+    'eth-mainnet': {
+      type: 'http',
+      url: configVariable('ETH_MAINNET_RPC_URL'),
+      accounts: [configVariable('DEPLOYER_ACCOUNT_PK')],
+    },
+    'eth-sepolia': {
+      type: 'http',
+      url: configVariable('ETH_SEPOLIA_RPC_URL'),
+      accounts: [configVariable('DEPLOYER_ACCOUNT_PK')],
+    },
+    'base-mainnet': {
+      type: 'http',
+      url: configVariable('BASE_MAINNET_RPC_URL'),
+      accounts: [configVariable('DEPLOYER_ACCOUNT_PK')],
+    },
+    'base-sepolia': {
+      type: 'http',
+      url: configVariable('BASE_SEPOLIA_RPC_URL'),
+      accounts: [configVariable('DEPLOYER_ACCOUNT_PK')],
+    },
+  },
+});

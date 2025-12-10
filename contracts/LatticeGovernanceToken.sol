@@ -1,12 +1,12 @@
 //SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
@@ -58,7 +58,7 @@ contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
         uint256 indexed tokenPercentageReleased
     );
 
-    constructor(IERC20 _ltxToken) ERC20("LatticeGovernanceToken", "veLTX") {
+    constructor(IERC20 _ltxToken) ERC20("LatticeGovernanceToken", "veLTX") Ownable(msg.sender) {
         ltxToken = _ltxToken;
     }
 
@@ -97,26 +97,6 @@ contract LatticeGovernanceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
         address to,
         uint256 amount
     ) public pure virtual override returns (bool) {
-        revert("veLTX: The Lattice veLTX token is not transferable");
-    }
-
-    function increaseAllowance(address spender, uint256 addedValue)
-        public
-        pure
-        virtual
-        override
-        returns (bool)
-    {
-        revert("veLTX: The Lattice veLTX token is not transferable");
-    }
-
-    function decreaseAllowance(address spender, uint256 subtractedValue)
-        public
-        pure
-        virtual
-        override
-        returns (bool)
-    {
         revert("veLTX: The Lattice veLTX token is not transferable");
     }
 
