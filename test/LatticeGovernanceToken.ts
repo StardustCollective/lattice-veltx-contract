@@ -26,7 +26,7 @@ const deployTokens = async () => {
   const ltxToken = await LatticeTokenFactory.connect(ownerAccount).deploy();
 
   const LatticeGovernanceTokenFactory = await ethers.getContractFactory(
-    'LatticeGovernanceTokenV1',
+    'LatticeGovernanceToken',
   );
   const veltxToken = await LatticeGovernanceTokenFactory.connect(
     ownerAccount,
@@ -111,7 +111,7 @@ const executeUnlock = async (
   return { decimalsLtx, decimalsVeltx, unlockTrxPromise };
 };
 
-describe('LatticeGovernanceTokenV1', function () {
+describe('LatticeGovernanceToken', function () {
   describe('Deploys', async () => {
     it('Deploys with right owner', async () => {
       const { veltxToken, ownerAccount } =
