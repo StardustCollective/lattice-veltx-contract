@@ -12,13 +12,6 @@ describe('LatticeGovernanceTokenDeployer', function () {
       await ethers.getContractFactory('TestLatticeToken');
     const ltxToken = await LatticeTokenFactory.deploy();
 
-    const LatticeGovernanceTokenFactory = await ethers.getContractFactory(
-      'LatticeGovernanceToken',
-    );
-    const veltxToken = await LatticeGovernanceTokenFactory.deploy(
-      await ltxToken.getAddress(),
-    );
-
     const DeployerFactory = await ethers.getContractFactory(
       'LatticeGovernanceTokenDeployer',
     );
@@ -27,7 +20,6 @@ describe('LatticeGovernanceTokenDeployer', function () {
     return {
       deployer,
       ltxToken,
-      veltxToken,
       ownerAccount,
       userAccountA,
       userAccountB,
